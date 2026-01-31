@@ -346,7 +346,7 @@
                     clearTimeout(saveDebounceTimer);
                     saveDebounceTimer = setTimeout(() => {
                         saveScheduleToFirebase(dateStr, employee, e.target.innerHTML);
-                    }, 300); // 300ms防抖，可根据需要调整
+                    }, 200); // 200ms防抖，可根据需要调整
                 });
 
                 tr.appendChild(tdEmployee);
@@ -433,3 +433,4 @@
     </script>
 </body>
 </html>
+
