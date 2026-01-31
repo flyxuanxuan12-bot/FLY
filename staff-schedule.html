@@ -218,8 +218,10 @@
         // 全局常量与变量
         const YEAR = new Date().getFullYear();
         const WEEK_HEADERS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-        let currentSelectDate = ""; // 当前选中的日期（YYYY-MM-DD）
-        let db; // Firebase实时数据库实例
+        let currentSelectDate = ""; 
+        let db; 
+        let saveDebounceTimer = null; // 防抖定时器
+        let currentEditingEmployee = ""; // 当前正在编辑的员工
 
         // 初始化Firebase实时数据库（compat版本初始化方式与原版本一致，无需修改）
         firebase.initializeApp(firebaseConfig);
@@ -307,47 +309,68 @@
             }
         }
 
-        // 核心：渲染当日安排表 + 多用户实时协同同步
-        function renderScheduleTable(dateStr) {
-            const calendar = document.getElementById('calendar');
-            const scheduleTable = document.getElementById('scheduleTable');
-            const dateTitle = document.getElementById('dateTitle');
-            const scheduleTbody = document.getElementById('scheduleTbody');
+            // 核心修改：渲染当日安排表（优化渲染逻辑，避免全量重建）
+    function renderScheduleTable(dateStr) {
+        const calendar = document.getElementById('calendar');
+        const scheduleTable = document.getElementById('scheduleTable');
+        const dateTitle = document.getElementById('dateTitle');
+        const scheduleTbody = document.getElementById('scheduleTbody');
 
-            // 切换视图：隐藏日历，显示安排表
-            calendar.classList.remove('active');
-            scheduleTable.classList.add('active');
-            dateTitle.innerHTML = `${dateStr} 员工工作安排表`;
-            scheduleTbody.innerHTML = '';
+        calendar.classList.remove('active');
+        scheduleTable.classList.add('active');
+        dateTitle.innerHTML = `${dateStr} 员工工作安排表`;
+        
+        // 首次渲染：创建所有行（只执行一次）
+        if (scheduleTbody.children.length === 0) {
+            EMPLOYEE_LIST.forEach(employee => {
+                const tr = document.createElement('tr');
+                tr.dataset.employee = employee; // 标记员工姓名，方便后续查找
+                
+                const tdEmployee = document.createElement('td');
+                tdEmployee.className = 'employee';
+                tdEmployee.innerHTML = employee;
 
-            // 监听Firebase云端数据变化（一人编辑，全员实时更新）
-            const scheduleRef = db.ref(`schedules/${dateStr}`);
-            scheduleRef.on('value', (snapshot) => {
-                const dayData = snapshot.val() || {};
-                scheduleTbody.innerHTML = '';
-                // 生成员工表格行
-                EMPLOYEE_LIST.forEach(employee => {
-                    const tr = document.createElement('tr');
-                    // 员工名列（不可编辑）
-                    const tdEmployee = document.createElement('td');
-                    tdEmployee.className = 'employee';
-                    tdEmployee.innerHTML = employee;
-                    // 工作安排列（可编辑，实时同步）
-                    const tdInput = document.createElement('td');
-                    tdInput.className = 'input-cell';
-                    tdInput.contentEditable = true;
-                    tdInput.innerHTML = dayData[employee] || ''; // 回显云端数据
-
-                    // 编辑时实时保存到Firebase云端
-                    tdInput.addEventListener('input', () => {
-                        saveScheduleToFirebase(dateStr, employee, tdInput.innerHTML);
-                    });
-
-                    tr.appendChild(tdEmployee);
-                    tr.appendChild(tdInput);
-                    scheduleTbody.appendChild(tr);
+                const tdInput = document.createElement('td');
+                tdInput.className = 'input-cell';
+                tdInput.contentEditable = true;
+                // 记录当前编辑的员工
+                tdInput.addEventListener('focus', () => {
+                    currentEditingEmployee = employee;
                 });
+                // 失焦后清空编辑状态
+                tdInput.addEventListener('blur', () => {
+                    currentEditingEmployee = "";
+                });
+                // 编辑时防抖保存（避免高频触发）
+                tdInput.addEventListener('input', (e) => {
+                    clearTimeout(saveDebounceTimer);
+                    saveDebounceTimer = setTimeout(() => {
+                        saveScheduleToFirebase(dateStr, employee, e.target.innerHTML);
+                    }, 300); // 300ms防抖，可根据需要调整
+                });
+
+                tr.appendChild(tdEmployee);
+                tr.appendChild(tdInput);
+                scheduleTbody.appendChild(tr);
             });
+        }
+
+             // 监听Firebase数据变化（仅更新内容，不重建DOM）
+        const scheduleRef = db.ref(`schedules/${dateStr}`);
+        scheduleRef.on('value', (snapshot) => {
+            const dayData = snapshot.val() || {};
+            // 遍历所有行，只更新内容，不重建DOM
+            EMPLOYEE_LIST.forEach(employee => {
+                // 跳过当前正在编辑的员工（避免覆盖输入）
+                if (employee === currentEditingEmployee) return;
+                
+                const tr = scheduleTbody.querySelector(`tr[data-employee="${employee}"]`);
+                if (tr) {
+                    const tdInput = tr.querySelector('.input-cell');
+                    tdInput.innerHTML = dayData[employee] || '';
+                }
+            });
+        });
 
             // 绑定导出按钮事件
             document.getElementById('exportToday').onclick = () => exportTodayExcel(dateStr);
@@ -409,6 +432,4 @@
         }
     </script>
 </body>
-
 </html>
-
