@@ -4,12 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>员工工作安排系统</title>
-    <!-- 引入SheetJS（Excel导出，无修改） -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <!-- 核心修复：替换为Firebase兼容浏览器的UMD版本SDK（解决export/import语法错误） -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
     <style>
+        /* 原有样式不变，此处省略 */
         * {
             margin: 0;
             padding: 0;
@@ -34,7 +33,6 @@
             margin-bottom: 30px;
             font-size: 24px;
         }
-        /* 按钮样式 */
         .btn-group {
             text-align: center;
             margin-bottom: 20px;
@@ -47,13 +45,10 @@
             color: #fff;
             cursor: pointer;
             font-size: 14px;
-            margin: 0 5px;
-            transition: background 0.2s;
         }
         .btn:hover {
             background: #0d66d0;
         }
-        /* 按月分隔日历核心样式 */
         .calendar {
             display: none;
             gap: 30px;
@@ -122,7 +117,6 @@
             color: #fff;
             border-color: #1677ff;
         }
-        /* 工作安排表样式（贴近Excel） */
         .schedule-table {
             display: none;
             width: 100%;
@@ -164,7 +158,6 @@
             margin-bottom: 15px;
             font-weight: 500;
         }
-        /* 响应式适配（电脑/平板/手机） */
         @media (max-width: 1024px) {
             .calendar-month {width: calc(50% - 15px);}
         }
@@ -176,15 +169,12 @@
 <body>
     <div class="container">
         <h1>员工工作安排系统</h1>
-        <!-- 功能按钮（直接显示） -->
         <div class="btn-group">
             <button class="btn" id="backCalendar">返回日历</button>
             <button class="btn" id="exportToday">导出当日Excel</button>
             <button class="btn" id="exportAll">导出全部Excel</button>
         </div>
-        <!-- 按月日历视图（默认显示） -->
         <div class="calendar active" id="calendar"></div>
-        <!-- 当日工作安排表视图 -->
         <div id="scheduleContainer">
             <div class="date-title" id="dateTitle"></div>
             <table class="schedule-table" id="scheduleTable">
@@ -200,8 +190,6 @@
     </div>
 
     <script>
-        // ===================== 仅需修改这2处！！！ =====================
-        // 1. 替换为你从Firebase控制台复制的【完整配置】（7个字段缺一不可）
         const firebaseConfig = {
             apiKey: "AIzaSyA-q_tMZ9hxccIcQn163cnH1lm15ppIJok",
             authDomain: "staff-scheduling-system-8bde6.firebaseapp.com",
@@ -211,54 +199,61 @@
             messagingSenderId: "611008571565",
             appId: "1:611008571565:web:d383451c1d503cbdb6be24"
         };
-        // 2. 替换为你团队的【实际员工姓名】（直接添加/删除，表格自动适配）
         const EMPLOYEE_LIST = ["田科培", "李洪涛", "李娟", "周媛", "熊正江", "祁亚飞", "郝成慧", "张艺", "朱兴", "丁靖", "张庭瑞", "张洲", "黄金", "王露", "李雪琦", "李雨亭", "陈梦媛", "赵芯"];
-        // ================================================================
 
-        // 全局常量与变量
+        // 全局变量优化：增加当前监听的引用，便于精准取消
         const YEAR = new Date().getFullYear();
         const WEEK_HEADERS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-        let currentSelectDate = ""; 
-        let db; 
-        let saveDebounceTimer = null; // 防抖定时器
-        let currentEditingEmployee = ""; // 当前正在编辑的员工
+        let currentSelectDate = "";
+        let db;
+        let currentScheduleRef = null; // 新增：保存当前日期的监听引用
 
-        // 初始化Firebase实时数据库（compat版本初始化方式与原版本一致，无需修改）
+        // 节流函数：解决input高频触发写入问题（500ms内只执行一次）
+        function throttle(fn, delay = 500) {
+            let timer = null;
+            return function(...args) {
+                if (!timer) {
+                    timer = setTimeout(() => {
+                        fn.apply(this, args);
+                        timer = null;
+                    }, delay);
+                }
+            };
+        }
+
         firebase.initializeApp(firebaseConfig);
         db = firebase.database();
 
-        // 页面加载完成后直接生成日历（兼容所有浏览器）
         document.addEventListener('DOMContentLoaded', function() {
-            initCalendarByMonth(YEAR); // 生成按月日历
-            bindBaseEvent(); // 绑定返回日历按钮事件
+            initCalendarByMonth(YEAR);
+            bindBaseEvent();
         });
 
-        // 绑定基础按钮事件
         function bindBaseEvent() {
             document.getElementById('backCalendar').addEventListener('click', () => {
                 document.getElementById('calendar').classList.add('active');
                 document.getElementById('scheduleTable').classList.remove('active');
-                // 取消监听，避免重复渲染
-                if (currentSelectDate) db.ref(`schedules/${currentSelectDate}`).off();
+                // 优化：精准取消当前日期的监听
+                if (currentScheduleRef) {
+                    currentScheduleRef.off();
+                    currentScheduleRef = null;
+                }
+                currentSelectDate = "";
             });
         }
 
-        // 核心：按月生成日历（全日期可点击、今日高亮、周一至周日表头）
         function initCalendarByMonth(year) {
             const calendar = document.getElementById('calendar');
             calendar.innerHTML = '';
-            // 遍历12个月，生成独立的月份模块
             for (let month = 0; month < 12; month++) {
                 const monthContainer = document.createElement('div');
                 monthContainer.className = 'calendar-month';
 
-                // 月份标题
                 const monthTitle = document.createElement('div');
                 monthTitle.className = 'month-title';
                 monthTitle.innerHTML = `${year}年${month + 1}月`;
                 monthContainer.appendChild(monthTitle);
 
-                // 星期表头（周一至周日）
                 const weekHeader = document.createElement('div');
                 weekHeader.className = 'month-week-header';
                 WEEK_HEADERS.forEach(week => {
@@ -268,34 +263,28 @@
                 });
                 monthContainer.appendChild(weekHeader);
 
-                // 日期网格容器
                 const daysContainer = document.createElement('div');
                 daysContainer.className = 'month-days';
 
-                // 计算前置空白占位（保证日期与星期对齐）
                 const firstDayOfMonth = new Date(year, month, 1);
-                let firstDayWeek = firstDayOfMonth.getDay(); // 0=周日，1=周一
-                firstDayWeek = firstDayWeek === 0 ? 6 : firstDayWeek - 1; // 转为周一为起始
-                // 生成空白占位格
+                let firstDayWeek = firstDayOfMonth.getDay();
+                firstDayWeek = firstDayWeek === 0 ? 6 : firstDayWeek - 1;
                 for (let i = 0; i < firstDayWeek; i++) {
                     const emptyCell = document.createElement('div');
                     emptyCell.className = 'day-cell empty';
                     daysContainer.appendChild(emptyCell);
                 }
 
-                // 生成当月所有日期
                 const totalDays = new Date(year, month + 1, 0).getDate();
                 for (let day = 1; day <= totalDays; day++) {
                     const currentDate = new Date(year, month, day);
                     const dateStr = formatDate(currentDate);
                     const isToday = isCurrentDay(currentDate);
 
-                    // 创建日期格子
                     const dayCell = document.createElement('div');
                     dayCell.className = 'day-cell';
                     dayCell.innerHTML = day;
-                    if (isToday) dayCell.classList.add('today'); // 今日高亮
-                    // 点击日期进入当日安排表
+                    if (isToday) dayCell.classList.add('today');
                     dayCell.addEventListener('click', () => {
                         currentSelectDate = dateStr;
                         renderScheduleTable(dateStr);
@@ -309,80 +298,75 @@
             }
         }
 
-            // 核心修改：渲染当日安排表（优化渲染逻辑，避免全量重建）
-    function renderScheduleTable(dateStr) {
-        const calendar = document.getElementById('calendar');
-        const scheduleTable = document.getElementById('scheduleTable');
-        const dateTitle = document.getElementById('dateTitle');
-        const scheduleTbody = document.getElementById('scheduleTbody');
+        function renderScheduleTable(dateStr) {
+            const calendar = document.getElementById('calendar');
+            const scheduleTable = document.getElementById('scheduleTable');
+            const dateTitle = document.getElementById('dateTitle');
+            const scheduleTbody = document.getElementById('scheduleTbody');
 
-        calendar.classList.remove('active');
-        scheduleTable.classList.add('active');
-        dateTitle.innerHTML = `${dateStr} 员工工作安排表`;
-        
-        // 首次渲染：创建所有行（只执行一次）
-        if (scheduleTbody.children.length === 0) {
-            EMPLOYEE_LIST.forEach(employee => {
-                const tr = document.createElement('tr');
-                tr.dataset.employee = employee; // 标记员工姓名，方便后续查找
-                
-                const tdEmployee = document.createElement('td');
-                tdEmployee.className = 'employee';
-                tdEmployee.innerHTML = employee;
+            // 关键修复1：切换日期时，先取消上一个日期的监听
+            if (currentScheduleRef) {
+                currentScheduleRef.off();
+                currentScheduleRef = null;
+            }
 
-                const tdInput = document.createElement('td');
-                tdInput.className = 'input-cell';
-                tdInput.contentEditable = true;
-                // 记录当前编辑的员工
-                tdInput.addEventListener('focus', () => {
-                    currentEditingEmployee = employee;
-                });
-                // 失焦后清空编辑状态
-                tdInput.addEventListener('blur', () => {
-                    currentEditingEmployee = "";
-                });
-                // 编辑时防抖保存（避免高频触发）
-                tdInput.addEventListener('input', (e) => {
-                    clearTimeout(saveDebounceTimer);
-                    saveDebounceTimer = setTimeout(() => {
-                        saveScheduleToFirebase(dateStr, employee, e.target.innerHTML);
-                    }, 200); // 200ms防抖，可根据需要调整
-                });
+            calendar.classList.remove('active');
+            scheduleTable.classList.add('active');
+            dateTitle.innerHTML = `${dateStr} 员工工作安排表`;
+            scheduleTbody.innerHTML = '';
 
-                tr.appendChild(tdEmployee);
-                tr.appendChild(tdInput);
-                scheduleTbody.appendChild(tr);
-            });
-        }
+            // 关键修复2：保存当前监听引用，便于后续取消
+            currentScheduleRef = db.ref(`schedules/${dateStr}`);
+            currentScheduleRef.on('value', (snapshot) => {
+                const dayData = snapshot.val() || {};
+                scheduleTbody.innerHTML = '';
+                EMPLOYEE_LIST.forEach(employee => {
+                    const tr = document.createElement('tr');
+                    const tdEmployee = document.createElement('td');
+                    tdEmployee.className = 'employee';
+                    tdEmployee.innerHTML = employee;
 
-             // 监听Firebase数据变化（仅更新内容，不重建DOM）
-        const scheduleRef = db.ref(`schedules/${dateStr}`);
-        scheduleRef.on('value', (snapshot) => {
-            const dayData = snapshot.val() || {};
-            // 遍历所有行，只更新内容，不重建DOM
-            EMPLOYEE_LIST.forEach(employee => {
-                // 跳过当前正在编辑的员工（避免覆盖输入）
-                if (employee === currentEditingEmployee) return;
-                
-                const tr = scheduleTbody.querySelector(`tr[data-employee="${employee}"]`);
-                if (tr) {
-                    const tdInput = tr.querySelector('.input-cell');
+                    const tdInput = document.createElement('td');
+                    tdInput.className = 'input-cell';
+                    tdInput.contentEditable = true;
                     tdInput.innerHTML = dayData[employee] || '';
-                }
-            });
-        });
 
-            // 绑定导出按钮事件
+                    // 关键修复3：给input事件添加节流，避免高频写入
+                    const throttledSave = throttle((content) => {
+                        saveScheduleToFirebase(dateStr, employee, content);
+                    }, 500);
+
+                    tdInput.addEventListener('input', (e) => {
+                        throttledSave(e.target.innerHTML);
+                    });
+
+                    tr.appendChild(tdEmployee);
+                    tr.appendChild(tdInput);
+                    scheduleTbody.appendChild(tr);
+                });
+            }, (error) => {
+                // 新增：监听错误处理，便于排查问题
+                console.error('监听Firebase数据失败：', error);
+                alert('数据同步失败，请刷新页面重试！');
+            });
+
             document.getElementById('exportToday').onclick = () => exportTodayExcel(dateStr);
             document.getElementById('exportAll').onclick = () => exportAllExcel();
         }
 
-        // 保存数据到Firebase云端（实时同步核心）
+        // 关键修复4：添加写入错误处理，确保数据写入可靠
         function saveScheduleToFirebase(dateStr, employee, content) {
-            db.ref(`schedules/${dateStr}/${employee}`).set(content);
+            db.ref(`schedules/${dateStr}/${employee}`)
+                .set(content)
+                .then(() => {
+                    console.log(`成功保存【${dateStr}】-${employee}的工作安排`);
+                })
+                .catch((error) => {
+                    console.error(`保存失败【${dateStr}】-${employee}：`, error);
+                    alert(`保存失败：${error.message}，请重新输入！`);
+                });
         }
 
-        // 导出当日工作安排为Excel
         function exportTodayExcel(dateStr) {
             db.ref(`schedules/${dateStr}`).once('value', (snapshot) => {
                 const dayData = snapshot.val() || {};
@@ -397,7 +381,6 @@
             });
         }
 
-        // 导出全年已填写内容为Excel（每个日期一个工作表）
         function exportAllExcel() {
             db.ref(`schedules`).once('value', (snapshot) => {
                 const allData = snapshot.val() || {};
@@ -415,7 +398,6 @@
             });
         }
 
-        // 工具函数：格式化日期为YYYY-MM-DD
         function formatDate(date) {
             const year = date.getFullYear();
             const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -423,7 +405,6 @@
             return `${year}-${month}-${day}`;
         }
 
-        // 工具函数：判断是否为今日（用于高亮）
         function isCurrentDay(date) {
             const today = new Date();
             return date.getFullYear() === today.getFullYear() &&
@@ -433,4 +414,3 @@
     </script>
 </body>
 </html>
-
