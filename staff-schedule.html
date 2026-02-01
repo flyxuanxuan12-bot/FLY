@@ -4,9 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>员工工作安排系统</title>
-    <!-- 引入SheetJS（Excel导出，无修改） -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <!-- 核心修复：替换为Firebase兼容浏览器的UMD版本SDK（解决export/import语法错误） -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
     <style>
@@ -82,7 +80,8 @@
         }
         .month-week-header {
             display: grid;
-            grid-template-columns: repeat(7, 1fr);
+            /* 8列：周一到周日 + 周汇总 */
+            grid-template-columns: repeat(8, 1fr);
             gap: 5px;
             margin-bottom: 8px;
         }
@@ -95,7 +94,8 @@
         }
         .month-days {
             display: grid;
-            grid-template-columns: repeat(7, 1fr);
+            /* 8列：日期列 + 周汇总按钮列 */
+            grid-template-columns: repeat(8, 1fr);
             gap: 5px;
         }
         .day-cell {
@@ -107,13 +107,17 @@
             border: 1px solid #eee;
             cursor: pointer;
             background: #fff;
+            min-height: 42px; /* 保证高度一致 */
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
         .day-cell.empty {
             border: none;
             background: transparent;
             cursor: default;
         }
-        .day-cell:hover {
+        .day-cell:hover:not(.empty) {
             background: #e6f7ff;
             border-color: #91d5ff;
         }
@@ -122,7 +126,34 @@
             color: #fff;
             border-color: #1677ff;
         }
-        /* 工作安排表样式（贴近Excel） */
+        /* 周汇总按钮样式 */
+        .week-view-btn-cell {
+            text-align: center;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .week-view-btn {
+            width: 100%;
+            height: 100%;
+            font-size: 12px;
+            border: none;
+            border-radius: 4px;
+            background: #52c41a;
+            color: #fff;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 4px;
+            line-height: 1.2;
+        }
+        .week-view-btn:hover {
+            background: #389e0d;
+        }
+        /* 工作安排表样式 */
         .schedule-table {
             display: none;
             width: 100%;
@@ -157,6 +188,34 @@
             background: #fffbe6;
             border-color: #ffc53d;
         }
+        /* 周汇总表格样式 */
+        .week-summary-table {
+            display: none;
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        .week-summary-table.active {
+            display: table;
+        }
+        .week-summary-table th, .week-summary-table td {
+            border: 1px solid #ccc;
+            padding: 8px;
+            text-align: left;
+            vertical-align: top;
+            font-size: 13px;
+        }
+        .week-summary-table th {
+            background: #f2f2f2;
+            font-weight: bold;
+            color: #333;
+            text-align: center;
+        }
+        .week-summary-table td.employee {
+            background: #f9f9f9;
+            font-weight: 500;
+            text-align: center;
+        }
         .date-title {
             text-align: center;
             font-size: 18px;
@@ -164,27 +223,28 @@
             margin-bottom: 15px;
             font-weight: 500;
         }
-        /* 响应式适配（电脑/平板/手机） */
+        /* 响应式适配 */
         @media (max-width: 1024px) {
             .calendar-month {width: calc(50% - 15px);}
         }
         @media (max-width: 640px) {
             .calendar-month {width: 100%;}
+            .week-view-btn {font-size: 11px;}
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>员工工作安排系统</h1>
-        <!-- 功能按钮（直接显示） -->
         <div class="btn-group">
             <button class="btn" id="backCalendar">返回日历</button>
             <button class="btn" id="exportToday">导出当日Excel</button>
             <button class="btn" id="exportAll">导出全部Excel</button>
+            <button class="btn" id="exportWeek">导出本周Excel</button>
         </div>
-        <!-- 按月日历视图（默认显示） -->
+        
         <div class="calendar active" id="calendar"></div>
-        <!-- 当日工作安排表视图 -->
+        
         <div id="scheduleContainer">
             <div class="date-title" id="dateTitle"></div>
             <table class="schedule-table" id="scheduleTable">
@@ -197,11 +257,18 @@
                 <tbody id="scheduleTbody"></tbody>
             </table>
         </div>
+        
+        <div id="weekSummaryContainer">
+            <div class="date-title" id="weekSummaryTitle"></div>
+            <table class="week-summary-table" id="weekSummaryTable">
+                <thead id="weekSummaryThead"></thead>
+                <tbody id="weekSummaryTbody"></tbody>
+            </table>
+        </div>
     </div>
 
     <script>
-        // ===================== 仅需修改这2处！！！ =====================
-        // 1. 替换为你从Firebase控制台复制的【完整配置】（7个字段缺一不可）
+        // ===================== 配置区域 =====================
         const firebaseConfig = {
             apiKey: "AIzaSyA-q_tMZ9hxccIcQn163cnH1lm15ppIJok",
             authDomain: "staff-scheduling-system-8bde6.firebaseapp.com",
@@ -211,55 +278,51 @@
             messagingSenderId: "611008571565",
             appId: "1:611008571565:web:d383451c1d503cbdb6be24"
         };
-        // 2. 替换为你团队的【实际员工姓名】（直接添加/删除，表格自动适配）
         const EMPLOYEE_LIST = ["田科培", "李洪涛", "李娟", "周媛", "熊正江", "祁亚飞", "郝成慧", "张艺", "朱兴", "丁靖", "张庭瑞", "张洲", "黄金", "王露", "李雪琦", "李雨亭", "陈梦媛", "赵芯"];
-        // ================================================================
+        // ===================================================
 
-        // 全局常量与变量
         const YEAR = new Date().getFullYear();
-        const WEEK_HEADERS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-        let currentSelectDate = ""; // 当前选中的日期（YYYY-MM-DD）
-        let db; // Firebase实时数据库实例
-        let employeeCellMap = {}; // 缓存员工对应的输入单元格，避免重复创建DOM
+        const WEEK_HEADERS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日", "周汇总"];
+        let currentSelectDate = "";
+        let currentWeekRange = { start: "", end: "" };
+        let db;
+        let employeeCellMap = {};
 
-        // 初始化Firebase实时数据库（compat版本初始化方式与原版本一致，无需修改）
         firebase.initializeApp(firebaseConfig);
         db = firebase.database();
 
-        // 页面加载完成后直接生成日历（兼容所有浏览器）
         document.addEventListener('DOMContentLoaded', function() {
-            initCalendarByMonth(YEAR); // 生成按月日历
-            bindBaseEvent(); // 绑定返回日历按钮事件
+            initCalendarByMonth(YEAR);
+            bindBaseEvent();
+            document.getElementById('exportWeek').style.display = 'none';
         });
 
-        // 绑定基础按钮事件
         function bindBaseEvent() {
             document.getElementById('backCalendar').addEventListener('click', () => {
                 document.getElementById('calendar').classList.add('active');
                 document.getElementById('scheduleTable').classList.remove('active');
-                // 取消监听，避免重复渲染
+                document.getElementById('weekSummaryTable').classList.remove('active');
+                document.getElementById('exportWeek').style.display = 'none';
                 if (currentSelectDate) db.ref(`schedules/${currentSelectDate}`).off();
-                // 清空缓存，避免下次渲染冲突
                 employeeCellMap = {};
+                currentWeekRange = { start: "", end: "" };
             });
         }
 
-        // 核心：按月生成日历（全日期可点击、今日高亮、周一至周日表头）
+        // 核心修复：按月生成日历，确保日期和按钮对齐
         function initCalendarByMonth(year) {
             const calendar = document.getElementById('calendar');
             calendar.innerHTML = '';
-            // 遍历12个月，生成独立的月份模块
+            
             for (let month = 0; month < 12; month++) {
                 const monthContainer = document.createElement('div');
                 monthContainer.className = 'calendar-month';
 
-                // 月份标题
                 const monthTitle = document.createElement('div');
                 monthTitle.className = 'month-title';
                 monthTitle.innerHTML = `${year}年${month + 1}月`;
                 monthContainer.appendChild(monthTitle);
 
-                // 星期表头（周一至周日）
                 const weekHeader = document.createElement('div');
                 weekHeader.className = 'month-week-header';
                 WEEK_HEADERS.forEach(week => {
@@ -269,40 +332,89 @@
                 });
                 monthContainer.appendChild(weekHeader);
 
-                // 日期网格容器
                 const daysContainer = document.createElement('div');
                 daysContainer.className = 'month-days';
 
-                // 计算前置空白占位（保证日期与星期对齐）
+                // 1. 计算月初空白格（严格对应周一到周日）
                 const firstDayOfMonth = new Date(year, month, 1);
-                let firstDayWeek = firstDayOfMonth.getDay(); // 0=周日，1=周一
-                firstDayWeek = firstDayWeek === 0 ? 6 : firstDayWeek - 1; // 转为周一为起始
-                // 生成空白占位格
+                let firstDayWeek = firstDayOfMonth.getDay(); // 0=周日
+                firstDayWeek = firstDayWeek === 0 ? 6 : firstDayWeek - 1; // 转换为 0=周一 ... 6=周日
+
+                // 2. 渲染空白格（千万不要在这里添加第8列的占位符，这是导致错位的根源）
                 for (let i = 0; i < firstDayWeek; i++) {
                     const emptyCell = document.createElement('div');
                     emptyCell.className = 'day-cell empty';
                     daysContainer.appendChild(emptyCell);
                 }
 
-                // 生成当月所有日期
                 const totalDays = new Date(year, month + 1, 0).getDate();
+                let currentColumn = firstDayWeek; // 0-6 (周一到周日)
+                let weekStartDate = null; 
+
+                // 3. 循环渲染日期
                 for (let day = 1; day <= totalDays; day++) {
                     const currentDate = new Date(year, month, day);
                     const dateStr = formatDate(currentDate);
-                    const isToday = isCurrentDay(currentDate);
+                    
+                    // 记录每周的开始日期（如果是周一）
+                    if (currentColumn === 0) {
+                        weekStartDate = new Date(currentDate);
+                    }
 
-                    // 创建日期格子
+                    // 创建日期格
                     const dayCell = document.createElement('div');
                     dayCell.className = 'day-cell';
                     dayCell.innerHTML = day;
-                    if (isToday) dayCell.classList.add('today'); // 今日高亮
-                    // 点击日期进入当日安排表
+                    if (isCurrentDay(currentDate)) dayCell.classList.add('today');
                     dayCell.addEventListener('click', () => {
                         currentSelectDate = dateStr;
                         renderScheduleTable(dateStr);
                     });
-
                     daysContainer.appendChild(dayCell);
+
+                    // 4. 处理周日（currentColumn = 6）：添加周汇总按钮
+                    if (currentColumn === 6) {
+                        // 修复：如果月初是周四，第一周结束时 weekStartDate 为 null，需反推
+                        if (!weekStartDate) {
+                            weekStartDate = new Date(currentDate);
+                            weekStartDate.setDate(currentDate.getDate() - 6);
+                        }
+                        
+                        addWeekButton(daysContainer, weekStartDate, currentDate); // 添加按钮
+                        
+                        currentColumn = 0; // 重置为周一
+                    } else {
+                        currentColumn++; // 移至下一天
+                    }
+                }
+
+                // 5. 处理月末剩余空白并补齐按钮
+                // 如果 month 结束时不是周日（currentColumn != 0，因为循环结束时如果刚过周日会被重置为0）
+                // 注意：上面的循环在周日时会将 currentColumn 重置为 0。所以如果 currentColumn > 0，说明最后一周没过完。
+                if (currentColumn !== 0) {
+                    // 补全剩余天数的空白格（直到周日，即 index 6）
+                    for (let i = currentColumn; i <= 6; i++) {
+                        const emptyCell = document.createElement('div');
+                        emptyCell.className = 'day-cell empty';
+                        daysContainer.appendChild(emptyCell);
+                    }
+                    
+                    // 必须补上最后一周的“周汇总”按钮，否则布局会缺角
+                    // 计算最后一周的起止时间
+                    const lastDay = new Date(year, month, totalDays);
+                    if (!weekStartDate) { // 防御性编程
+                         weekStartDate = new Date(lastDay);
+                         // 回退到本周一 (currentColumn此时已指向下个空白位，需修正逻辑)
+                         // 简单做法：直接用最后一天推算周一
+                         // lastDay 对应 currentColumn-1
+                         let dayIndex = (lastDay.getDay() === 0 ? 6 : lastDay.getDay() - 1);
+                         weekStartDate.setDate(lastDay.getDate() - dayIndex);
+                    }
+                    // 结束时间就是本周日（跨入下月）
+                    let weekEndDate = new Date(weekStartDate);
+                    weekEndDate.setDate(weekEndDate.getDate() + 6);
+
+                    addWeekButton(daysContainer, weekStartDate, weekEndDate);
                 }
 
                 monthContainer.appendChild(daysContainer);
@@ -310,41 +422,55 @@
             }
         }
 
-        // 核心：渲染当日安排表 + 多用户实时协同同步（优化焦点丢失问题）
+        // 辅助函数：添加周汇总按钮
+        function addWeekButton(container, startDate, endDate) {
+            const startStr = formatDate(startDate);
+            const endStr = formatDate(endDate);
+            
+            const btnCell = document.createElement('div');
+            btnCell.className = 'week-view-btn-cell';
+            
+            const viewBtn = document.createElement('button');
+            viewBtn.className = 'week-view-btn';
+            viewBtn.innerHTML = '查看<br>周汇总'; // 换行以适应窄列
+            viewBtn.addEventListener('click', () => {
+                currentWeekRange = { start: startStr, end: endStr };
+                renderWeekSummary(startStr, endStr);
+            });
+            
+            btnCell.appendChild(viewBtn);
+            container.appendChild(btnCell);
+        }
+
         function renderScheduleTable(dateStr) {
             const calendar = document.getElementById('calendar');
             const scheduleTable = document.getElementById('scheduleTable');
+            const weekSummaryTable = document.getElementById('weekSummaryTable');
             const dateTitle = document.getElementById('dateTitle');
             const scheduleTbody = document.getElementById('scheduleTbody');
 
-            // 切换视图：隐藏日历，显示安排表
             calendar.classList.remove('active');
+            weekSummaryTable.classList.remove('active');
             scheduleTable.classList.add('active');
             dateTitle.innerHTML = `${dateStr} 员工工作安排表`;
+            document.getElementById('exportWeek').style.display = 'none';
             
-            // 清空表格和缓存（首次渲染）
             scheduleTbody.innerHTML = '';
             employeeCellMap = {};
 
-            // 先初始化所有员工的表格行（只创建一次DOM）
             EMPLOYEE_LIST.forEach(employee => {
                 const tr = document.createElement('tr');
-                // 员工名列（不可编辑）
                 const tdEmployee = document.createElement('td');
                 tdEmployee.className = 'employee';
                 tdEmployee.innerHTML = employee;
-                // 工作安排列（可编辑，实时同步）
                 const tdInput = document.createElement('td');
                 tdInput.className = 'input-cell';
                 tdInput.contentEditable = true;
-                // 缓存单元格，方便后续更新内容
                 employeeCellMap[employee] = tdInput;
 
-                // 编辑时实时保存到Firebase云端（增加防抖，避免频繁保存）
                 let saveTimer = null;
                 tdInput.addEventListener('input', () => {
                     clearTimeout(saveTimer);
-                    // 防抖：300ms内只保存一次，减少Firebase触发频率
                     saveTimer = setTimeout(() => {
                         saveScheduleToFirebase(dateStr, employee, tdInput.innerHTML);
                     }, 300);
@@ -355,32 +481,81 @@
                 scheduleTbody.appendChild(tr);
             });
 
-            // 监听Firebase云端数据变化（仅更新内容，不重建DOM）
             const scheduleRef = db.ref(`schedules/${dateStr}`);
             scheduleRef.on('value', (snapshot) => {
                 const dayData = snapshot.val() || {};
-                // 遍历员工，只更新内容，不重建单元格
                 EMPLOYEE_LIST.forEach(employee => {
                     const cell = employeeCellMap[employee];
-                    // 只有当单元格未处于编辑状态时，才更新内容（避免覆盖正在输入的内容）
                     if (cell !== document.activeElement) {
                         cell.innerHTML = dayData[employee] || '';
                     }
                 });
             });
 
-            // 绑定导出按钮事件
             document.getElementById('exportToday').onclick = () => exportTodayExcel(dateStr);
             document.getElementById('exportAll').onclick = () => exportAllExcel();
         }
 
-        // 保存数据到Firebase云端（实时同步核心）
+        function renderWeekSummary(weekStartStr, weekEndStr) {
+            const calendar = document.getElementById('calendar');
+            const scheduleTable = document.getElementById('scheduleTable');
+            const weekSummaryTable = document.getElementById('weekSummaryTable');
+            const weekSummaryTitle = document.getElementById('weekSummaryTitle');
+            const weekSummaryThead = document.getElementById('weekSummaryThead');
+            const weekSummaryTbody = document.getElementById('weekSummaryTbody');
+
+            calendar.classList.remove('active');
+            scheduleTable.classList.remove('active');
+            weekSummaryTable.classList.add('active');
+            weekSummaryTitle.innerHTML = `${weekStartStr} 至 ${weekEndStr} 员工工作安排周汇总`;
+            document.getElementById('exportWeek').style.display = 'inline-block';
+
+            const weekDateList = [];
+            let currentDate = new Date(weekStartStr);
+            while (currentDate <= new Date(weekEndStr)) {
+                weekDateList.push(formatDate(currentDate));
+                currentDate.setDate(currentDate.getDate() + 1);
+            }
+
+            weekSummaryThead.innerHTML = '';
+            const theadTr = document.createElement('tr');
+            theadTr.innerHTML = '<th>员工姓名</th>';
+            weekDateList.forEach(dateStr => {
+                theadTr.innerHTML += `<th>${dateStr}</th>`;
+            });
+            weekSummaryThead.appendChild(theadTr);
+
+            weekSummaryTbody.innerHTML = '';
+            db.ref(`schedules`).once('value', (snapshot) => {
+                const allScheduleData = snapshot.val() || {};
+                EMPLOYEE_LIST.forEach(employee => {
+                    const tr = document.createElement('tr');
+                    const tdEmployee = document.createElement('td');
+                    tdEmployee.className = 'employee';
+                    tdEmployee.innerHTML = employee;
+                    tr.appendChild(tdEmployee);
+
+                    weekDateList.forEach(dateStr => {
+                        const dayData = allScheduleData[dateStr] || {};
+                        const td = document.createElement('td');
+                        td.innerHTML = dayData[employee] || '';
+                        tr.appendChild(td);
+                    });
+                    weekSummaryTbody.appendChild(tr);
+                });
+            });
+
+            document.getElementById('exportToday').onclick = () => exportTodayExcel(currentSelectDate);
+            document.getElementById('exportAll').onclick = () => exportAllExcel();
+            document.getElementById('exportWeek').onclick = () => exportWeekExcel(weekStartStr, weekEndStr, weekDateList);
+        }
+
         function saveScheduleToFirebase(dateStr, employee, content) {
             db.ref(`schedules/${dateStr}/${employee}`).set(content);
         }
 
-        // 导出当日工作安排为Excel
         function exportTodayExcel(dateStr) {
+            if (!dateStr) return alert("请先选择日期");
             db.ref(`schedules/${dateStr}`).once('value', (snapshot) => {
                 const dayData = snapshot.val() || {};
                 const excelData = [
@@ -394,12 +569,35 @@
             });
         }
 
-        // 导出全年已填写内容为Excel（每个日期一个工作表）
+        function exportWeekExcel(weekStartStr, weekEndStr, weekDateList) {
+            db.ref(`schedules`).once('value', (snapshot) => {
+                const allScheduleData = snapshot.val() || {};
+                const excelData = [
+                    ['员工姓名', ...weekDateList],
+                    ...EMPLOYEE_LIST.map(employee => {
+                        const row = [employee];
+                        weekDateList.forEach(dateStr => {
+                            const dayData = allScheduleData[dateStr] || {};
+                            row.push(dayData[employee] || '');
+                        });
+                        return row;
+                    })
+                ];
+                const wb = XLSX.utils.book_new();
+                const ws = XLSX.utils.aoa_to_sheet(excelData);
+                XLSX.utils.book_append_sheet(wb, ws, `${weekStartStr}至${weekEndStr}`);
+                XLSX.writeFile(wb, `${weekStartStr}至${weekEndStr}员工工作安排周汇总.xlsx`);
+            });
+        }
+
         function exportAllExcel() {
             db.ref(`schedules`).once('value', (snapshot) => {
                 const allData = snapshot.val() || {};
                 const wb = XLSX.utils.book_new();
-                Object.keys(allData).forEach(dateStr => {
+                const sheetNames = Object.keys(allData).sort();
+                if (sheetNames.length === 0) return alert("暂无数据可导出");
+                
+                sheetNames.forEach(dateStr => {
                     const dayData = allData[dateStr];
                     const excelData = [
                         ['员工姓名', '当日工作安排'],
@@ -412,7 +610,6 @@
             });
         }
 
-        // 工具函数：格式化日期为YYYY-MM-DD
         function formatDate(date) {
             const year = date.getFullYear();
             const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -420,7 +617,6 @@
             return `${year}-${month}-${day}`;
         }
 
-        // 工具函数：判断是否为今日（用于高亮）
         function isCurrentDay(date) {
             const today = new Date();
             return date.getFullYear() === today.getFullYear() &&
